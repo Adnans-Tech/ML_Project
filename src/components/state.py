@@ -59,6 +59,3 @@ def init_session_state(st, artifacts_dir="artifacts"):
             "spent_this_month": 0.0
         }
 
-    # Chat history
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []

@@ -2,13 +2,14 @@
 import os
 import pandas as pd
 import streamlit as st
+import matplotlib.pyplot as plt
+import plotly.express as px
 
 # state and utils
 from src.components.state import init_session_state
 from src.utils import search_inventory, low_stock, expiring_soon
 
 # feature modules
-from src.model_training import inventory as inv_mod  # keep for low_stock/expiry helpers if you have them there
 from src.model_training import shopping_list as sl_mod
 from src.model_training import dietary as diet_mod
 from src.model_training import budget as budget_mod
@@ -44,20 +45,59 @@ if menu == "Dashboard":
     st.header("📊 Dashboard")
     df = st.session_state.inventory
 
+    # Helper for human-readable large numbers
+    def human_format(num):
+        for unit in ['', 'K', 'M', 'B']:
+            if abs(num) < 1000.0:
+                return f"{num:3.1f}{unit}"
+            num /= 1000.0
+        return f"{num:.1f}T"
+
+    # --- Metrics row ---
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("🛍️ Unique products", int(df["Product_Name"].nunique() if "Product_Name" in df.columns else len(df)))
     c2.metric("⚠️ Low stock items", int(len(low_stock(df))))
     c3.metric("⏳ Expiring soon (7d)", int(len(expiring_soon(df, days=7))))
-    total_inv_value = (pd.to_numeric(df.get("unit_price_inr", 0), errors="coerce").fillna(0) *
-                       pd.to_numeric(df.get("quantity_on_hand", 0), errors="coerce").fillna(0)).sum()
-    c4.metric("💰 Est. inventory value (₹)", f"{total_inv_value:,.0f}")
+    total_inv_value = (
+        pd.to_numeric(df.get("unit_price_inr", 0), errors="coerce").fillna(0) *
+        pd.to_numeric(df.get("quantity_on_hand", 0), errors="coerce").fillna(0)
+    ).sum()
+    c4.metric("💰 Est. inventory value", f"₹{human_format(total_inv_value)}")
 
-    st.subheader("📦 Inventory preview")
-    preview_cols = [c for c in ["Product_Name", "Brand", "unit_price_inr", "expiration_date"] if c in df.columns]
-    if preview_cols:
-        st.dataframe(df[preview_cols].head(50), use_container_width=True)
-    else:
-        st.info("Preview columns not found in dataset.")
+    # --- Visualizations ---
+    st.subheader("📦 Inventory Overview")
+
+    col1, col2 = st.columns(2)
+
+    # Pie chart - Category share
+    with col1:
+        if "Category" in df.columns and not df["Category"].isna().all():
+            cat_summary = df.groupby("Category")["quantity_on_hand"].sum().reset_index()
+            fig1 = px.pie(
+                cat_summary, names="Category", values="quantity_on_hand",
+                hole=0.4, title="Category-wise Inventory Share"
+            )
+            fig1.update_traces(textinfo="percent+label", pull=[0.05]*len(cat_summary))
+            st.plotly_chart(fig1, use_container_width=True)
+        else:
+            st.info("No category data available for visualization.")
+
+    # Line chart - Purchases over time
+    with col2:
+        if "purchase_date" in df.columns and not df["purchase_date"].isna().all():
+            df2 = df.copy()
+            df2["purchase_date"] = pd.to_datetime(df2["purchase_date"], errors="coerce")
+            time_summary = df2.groupby(df2["purchase_date"].dt.to_period("M"))["quantity_purchased"].sum().reset_index()
+            time_summary["purchase_date"] = time_summary["purchase_date"].astype(str)
+            fig2 = px.line(
+                time_summary, x="purchase_date", y="quantity_purchased",
+                markers=True, title="Purchases Over Time"
+            )
+            fig2.update_layout(xaxis_title="Month", yaxis_title="Quantity Purchased")
+            st.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.info("No purchase date data available for visualization.")
+
 
 # ---------------- Inventory ----------------
 elif menu == "Inventory":
@@ -75,7 +115,6 @@ elif menu == "Inventory":
     # selection + add to list
     st.subheader("➕ Add a product to shopping list")
     if not view.empty:
-        # build unique labels
         view = view.reset_index(drop=True)
         labels = view.apply(
             lambda r: f"{r.get('Product_Name','')} — {r.get('Brand','') or 'No brand'}  (₹{r.get('unit_price_inr',0)})",
@@ -98,7 +137,6 @@ elif menu == "Inventory":
 # ---------------- Dietary Preferences ----------------
 elif menu == "Dietary Preferences":
     st.header("🥗 Dietary Preferences")
-
     prefs = st.session_state.diet_prefs
     c1, c2, c3 = st.columns(3)
     prefs["vegetarian"] = c1.checkbox("Vegetarian", value=prefs.get("vegetarian", False))
@@ -119,13 +157,10 @@ elif menu == "Dietary Preferences":
 
     st.subheader("🍴 Suggestions (ANY of selected tags)")
     suggestions = diet_mod.suggest_items_any(st.session_state.inventory, prefs, limit=100)
-
     disp_cols = [c for c in ["Product_Name", "Brand", "Category", "unit_price_inr", "calories", "product_diet_tags"]
                  if c in suggestions.columns]
     if not suggestions.empty:
         st.dataframe(suggestions[disp_cols].head(50), use_container_width=True)
-
-        # allow adding from suggestions
         suggestions = suggestions.reset_index(drop=True)
         labels = suggestions.apply(
             lambda r: f"{r.get('Product_Name','')} — {r.get('Brand','') or 'No brand'}  (₹{r.get('unit_price_inr',0)})",
@@ -148,11 +183,9 @@ elif menu == "Shopping List":
     st.header("🛒 Shopping List")
 
     if st.session_state.shopping_list:
-        # editable quantities per item
         df_sl = sl_mod.as_dataframe(st.session_state.shopping_list)
         st.dataframe(df_sl, use_container_width=True)
 
-        # simple per-item quantity update
         st.subheader("Update item quantity / remove")
         names = [f"{i}. {item['name']} — {item.get('brand','')}" for i, item in enumerate(st.session_state.shopping_list)]
         if names:
@@ -166,9 +199,7 @@ elif menu == "Shopping List":
                 st.session_state.shopping_list = sl_mod.remove_item(st.session_state.shopping_list, i_sel)
                 st.success("Item removed.")
 
-        # totals
         st.metric("Estimated Total (₹)", sl_mod.estimate_total(st.session_state.shopping_list))
-
         if st.button("Clear shopping list"):
             st.session_state.shopping_list.clear()
             st.success("Shopping list cleared.")
@@ -178,15 +209,11 @@ elif menu == "Shopping List":
 # ---------------- Budget ----------------
 elif menu == "Budget":
     st.header("💰 Budget Manager")
-
-    # auto-compute planned spend from shopping list (read-only)
     planned = sl_mod.estimate_total(st.session_state.shopping_list)
-
     b = st.session_state.budget
     col = st.columns(3)
     b["monthly_budget"] = col[0].number_input("Monthly budget (₹)", min_value=0.0, step=100.0, value=float(b.get("monthly_budget", 0.0)))
     b["spent_this_month"] = col[1].number_input("Spent this month (₹)", min_value=0.0, step=50.0, value=float(b.get("spent_this_month", 0.0)))
-
     st.metric("Planned spend (₹)", planned)
     status = budget_mod.check_budget_status({
         "monthly_budget": b["monthly_budget"],
