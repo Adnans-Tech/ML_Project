@@ -4,3 +4,6 @@ streamlit
 scikit-learn
 scipy
 statsmodels
+matplotlib
+seaborn
+plotly
