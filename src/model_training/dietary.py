@@ -4,7 +4,6 @@ import pandas as pd
 # Map UI checkboxes to expected tag strings in `product_diet_tags`
 PREF_TO_TAG = {
     "vegetarian": "vegetarian",
-    "vegan": "vegan",
     "gluten_free": "gluten_free",
     "lactose_free": "lactose_free",
     "nut_free": "nut_free",
@@ -14,37 +13,39 @@ PREF_TO_TAG = {
 
 def _normalize_tags(cell) -> list:
     """
-    Accepts strings like "vegan; gluten_free" or "vegan,gluten_free"
-    and returns a list of lowercase tag tokens.
+    Normalize product_diet_tags into a consistent list of lowercase tokens.
+    Converts hyphens to underscores for matching.
+    Example: "gluten-free" -> "gluten_free"
     """
     if pd.isna(cell):
         return []
     s = str(cell).lower()
-    # split on common separators
     for sep in [";", ",", "|", "/", " "]:
         s = s.replace(sep, " ")
-    tokens = [t for t in s.split(" ") if t]
+    tokens = [t.strip().replace("-", "_") for t in s.split(" ") if t]
     return tokens
 
 def suggest_items_any(df: pd.DataFrame, prefs: dict, limit: int = 50) -> pd.DataFrame:
-    """Return items that match ANY of the selected dietary tags (loose filter)."""
+    """Return items that match ANY of the selected dietary tags."""
     if df.empty:
         return df
 
-    # selected tags
+    # Normalize selected tags
     tags = [PREF_TO_TAG[k] for k, v in prefs.items() if k in PREF_TO_TAG and v]
+    tags = [t.replace("-", "_") for t in tags]
+
     if not tags and not prefs.get("allergies"):
         return df.copy().head(limit)
 
-    # build boolean mask for ANY-match
     mask = pd.Series([False] * len(df), index=df.index)
-    if tags:
-        if "product_diet_tags" in df.columns:
-            tag_lists = df["product_diet_tags"].apply(_normalize_tags)
-            for t in tags:
-                mask |= tag_lists.apply(lambda lst: t in lst)
 
-    # allergy exclusion
+    # Match ANY dietary preference
+    if tags and "product_diet_tags" in df.columns:
+        tag_lists = df["product_diet_tags"].apply(_normalize_tags)
+        for t in tags:
+            mask |= tag_lists.apply(lambda lst: t in lst)
+
+    # Allergy exclusion
     allergies = [a.strip().lower() for a in prefs.get("allergies", []) if a]
     if allergies:
         for col in ["Product_Name", "Brand", "Category", "Subcategory"]:
@@ -54,4 +55,9 @@ def suggest_items_any(df: pd.DataFrame, prefs: dict, limit: int = 50) -> pd.Data
                 )
 
     out = df.loc[mask] if tags or allergies else df
+
+    # Fallback: if no match found, still return some items
+    if out.empty and tags:
+        return df.head(limit)
+
     return out.head(limit)

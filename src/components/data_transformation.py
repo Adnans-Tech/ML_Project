@@ -20,4 +20,3 @@ def dtransformation(df: pd.DataFrame) -> pd.DataFrame:
         ).astype(int)
 
     return df
-

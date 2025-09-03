@@ -44,7 +44,6 @@ if menu == "Dashboard":
     st.header("📊 Dashboard")
     df = st.session_state.inventory
 
-    # Helper for human-readable large numbers
     def human_format(num):
         for unit in ['', 'K', 'M', 'B']:
             if abs(num) < 1000.0:
@@ -65,60 +64,53 @@ if menu == "Dashboard":
 
     # --- Visualizations ---
     st.subheader("📦 Inventory Overview")
-
     col1, col2 = st.columns(2)
 
-    # Pie chart - Category share
     with col1:
         if "Category" in df.columns and not df["Category"].isna().all():
             cat_summary = df.groupby("Category")["quantity_on_hand"].sum().reset_index()
-            fig1 = px.pie(
-                cat_summary, names="Category", values="quantity_on_hand",
-                hole=0.4, title="Category-wise Inventory Share"
-            )
-            fig1.update_traces(textinfo="percent+label", pull=[0.05]*len(cat_summary))
+            fig1 = px.pie(cat_summary, names="Category", values="quantity_on_hand",
+                          hole=0.4, title="Category-wise Inventory Share")
+            fig1.update_traces(textinfo="percent+label", pull=[0.05] * len(cat_summary))
             st.plotly_chart(fig1, use_container_width=True)
         else:
             st.info("No category data available for visualization.")
 
-    # Line chart - Purchases over time
     with col2:
         if "purchase_date" in df.columns and not df["purchase_date"].isna().all():
             df2 = df.copy()
             df2["purchase_date"] = pd.to_datetime(df2["purchase_date"], errors="coerce")
             time_summary = df2.groupby(df2["purchase_date"].dt.to_period("M"))["quantity_purchased"].sum().reset_index()
             time_summary["purchase_date"] = time_summary["purchase_date"].astype(str)
-            fig2 = px.line(
-                time_summary, x="purchase_date", y="quantity_purchased",
-                markers=True, title="Purchases Over Time"
-            )
+            fig2 = px.line(time_summary, x="purchase_date", y="quantity_purchased",
+                           markers=True, title="Purchases Over Time")
             fig2.update_layout(xaxis_title="Month", yaxis_title="Quantity Purchased")
             st.plotly_chart(fig2, use_container_width=True)
         else:
             st.info("No purchase date data available for visualization.")
 
-
 # ---------------- Inventory ----------------
 elif menu == "Inventory":
     st.header("📦 Inventory — Search & Add to List")
-
     df = st.session_state.inventory
     q = st.text_input("Search by product name, category or brand")
     view = search_inventory(df, q) if q else df
 
-    # lightweight view table
-    cols = [c for c in ["Product_Name", "Brand", "Category", "unit", "unit_price_inr", "expiration_date",
-                        "quantity_on_hand", "reorder_level"] if c in view.columns]
-    st.dataframe(view[cols].reset_index(drop=True), use_container_width=True, height=300)
+    st.subheader("🌐 Inventory Overview")
+    if not view.empty and "Category" in view.columns:
+        fig = px.treemap(view, path=["Category", "Brand", "Product_Name"],
+                         values="quantity_on_hand", color="unit_price_inr",
+                         color_continuous_scale="RdBu",
+                         title="Category → Brand → Product (by Quantity & Price)")
+        st.plotly_chart(fig, use_container_width=True, height=600)
+    else:
+        st.info("No inventory data available for visualization. Try adding some products.")
 
     # selection + add to list
     st.subheader("➕ Add a product to shopping list")
     if not view.empty:
         view = view.reset_index(drop=True)
-        labels = view.apply(
-            lambda r: f"{r.get('Product_Name','')} — {r.get('Brand','') or 'No brand'}  (₹{r.get('unit_price_inr',0)})",
-            axis=1
-        ).tolist()
+        labels = view.apply(lambda r: f"{r.get('Product_Name','')} — {r.get('Brand','') or 'No brand'} (₹{r.get('unit_price_inr',0)})", axis=1).tolist()
         idx = st.selectbox("Choose a product", options=list(range(len(labels))), format_func=lambda i: labels[i])
         default_unit = str(view.loc[idx, "unit"]) if "unit" in view.columns else "pcs"
         qty = st.number_input("Quantity", min_value=1.0, step=1.0, value=1.0)
@@ -137,12 +129,12 @@ elif menu == "Inventory":
 elif menu == "Dietary Preferences":
     st.header("🥗 Dietary Preferences")
     prefs = st.session_state.diet_prefs
+
     c1, c2, c3 = st.columns(3)
     prefs["vegetarian"] = c1.checkbox("Vegetarian", value=prefs.get("vegetarian", False))
-    prefs["vegan"] = c1.checkbox("Vegan", value=prefs.get("vegan", False))
-    prefs["gluten_free"] = c2.checkbox("Gluten-free", value=prefs.get("gluten_free", False))
+    prefs["gluten_free"] = c1.checkbox("Gluten-free", value=prefs.get("gluten_free", False))
     prefs["lactose_free"] = c2.checkbox("Lactose-free", value=prefs.get("lactose_free", False))
-    prefs["nut_free"] = c3.checkbox("Nut-free", value=prefs.get("nut_free", False))
+    prefs["nut_free"] = c2.checkbox("Nut-free", value=prefs.get("nut_free", False))
     prefs["keto"] = c3.checkbox("Keto", value=prefs.get("keto", False))
     prefs["diabetic_friendly"] = c3.checkbox("Diabetic-friendly", value=prefs.get("diabetic_friendly", False))
 
@@ -151,69 +143,76 @@ elif menu == "Dietary Preferences":
         if allergy.lower() not in [a.lower() for a in prefs["allergies"]]:
             prefs["allergies"].append(allergy)
             st.success(f"✅ Added allergy: {allergy}")
+            st.rerun()
 
     st.write("**Allergies:**", ", ".join(prefs["allergies"]) or "None")
 
-    st.subheader("🍴 Suggestions (ANY of selected tags)")
-    suggestions = diet_mod.suggest_items_any(st.session_state.inventory, prefs, limit=100)
-    disp_cols = [c for c in ["Product_Name", "Brand", "Category", "unit_price_inr", "calories", "product_diet_tags"]
-                 if c in suggestions.columns]
-    if not suggestions.empty:
-        st.dataframe(suggestions[disp_cols].head(50), use_container_width=True)
-        suggestions = suggestions.reset_index(drop=True)
-        labels = suggestions.apply(
-            lambda r: f"{r.get('Product_Name','')} — {r.get('Brand','') or 'No brand'}  (₹{r.get('unit_price_inr',0)})",
-            axis=1
-        ).tolist()
-        idx = st.selectbox("Add a suggested product", options=list(range(len(labels))), format_func=lambda i: labels[i])
-        qty = st.number_input("Quantity (suggestions)", min_value=1.0, step=1.0, value=1.0, key="diet_qty")
-        unit = suggestions.loc[idx, "unit"] if "unit" in suggestions.columns else "pcs"
-        if st.button("Add suggestion to Shopping List"):
-            row = suggestions.loc[idx]
-            st.session_state.shopping_list = sl_mod.add_from_inventory_row(
-                st.session_state.shopping_list, row=row, qty=qty, unit=unit
-            )
-            st.success(f"Added {row.get('Product_Name','(item)')} from suggestions.")
+    st.subheader("🍴 Suggestions (based on preferences)")
+    all_suggestions = diet_mod.suggest_items_any(st.session_state.inventory, prefs)
+
+    if 'display_limit' not in st.session_state:
+        st.session_state.display_limit = 10
+
+    if not all_suggestions.empty:
+        suggestions_to_show = all_suggestions.head(st.session_state.display_limit)
+        st.metric("Matching Products", len(all_suggestions))
+
+        st.subheader("📋 Suggested Products")
+        for _, row in suggestions_to_show.iterrows():
+            product = row.get("Product_Name", "Unknown")
+            brand = row.get("Brand", "No brand")
+            price = row.get("unit_price_inr", "N/A")
+            st.markdown(f"✅ **{product}** <br> *{brand} — ₹{price}*", unsafe_allow_html=True)
+
+        if len(all_suggestions) > st.session_state.display_limit:
+            if st.button("Show more suggestions"):
+                st.session_state.display_limit += 10
+                st.rerun()
     else:
         st.info("No suggestions found for the selected preferences.")
 
+    st.subheader("➕ Add a product to shopping list")
+    suggestion_list = all_suggestions.apply(
+        lambda r: f"{r.get('Product_Name','Unknown')} — {r.get('Brand','No brand')} (₹{r.get('unit_price_inr',0)})", axis=1
+    ).tolist()
+
+    if suggestion_list:
+        idx = st.selectbox("Choose a product", options=list(range(len(suggestion_list))), format_func=lambda i: suggestion_list[i])
+        qty = st.number_input("Quantity", min_value=1.0, step=1.0, value=1.0, key="diet_qty")
+        unit = all_suggestions.loc[idx, "unit"] if "unit" in all_suggestions.columns else "pcs"
+
+        if st.button("Add suggestion to Shopping List"):
+            row = all_suggestions.loc[idx]
+            st.session_state.shopping_list = sl_mod.add_from_inventory_row(
+                st.session_state.shopping_list, row=row, qty=qty, unit=unit
+            )
+            st.success(f"Added {row.get('Product_Name','(item)')} to shopping list.")
+
 # ---------------- Shopping List ----------------
 elif menu == "Shopping List":
-    st.header("🛒 Shopping List")
+    st.header("📝 My Shopping List")
 
-    if st.session_state.shopping_list:
-        df_sl = sl_mod.as_dataframe(st.session_state.shopping_list)
-        st.dataframe(df_sl, use_container_width=True)
+    # Always convert to DataFrame for display
+    sl_df = sl_mod.as_dataframe(st.session_state.shopping_list)
 
-        st.subheader("Update item quantity / remove")
-        names = [f"{i}. {item['name']} — {item.get('brand','')}" for i, item in enumerate(st.session_state.shopping_list)]
-        if names:
-            i_sel = st.selectbox("Select item", options=list(range(len(names))), format_func=lambda i: names[i])
-            new_qty = st.number_input("New quantity", min_value=0.0, step=1.0, value=float(st.session_state.shopping_list[i_sel]["qty"]))
-            colu = st.columns(2)
-            if colu[0].button("Update quantity"):
-                st.session_state.shopping_list = sl_mod.update_qty(st.session_state.shopping_list, i_sel, new_qty)
-                st.success("Quantity updated.")
-            if colu[1].button("Remove item"):
-                st.session_state.shopping_list = sl_mod.remove_item(st.session_state.shopping_list, i_sel)
-                st.success("Item removed.")
+    if not sl_df.empty:
+        st.dataframe(sl_df, use_container_width=True)
 
-        st.metric("Estimated Total (₹)", sl_mod.estimate_total(st.session_state.shopping_list))
-        if st.button("Clear shopping list"):
-            st.session_state.shopping_list.clear()
-            st.success("Shopping list cleared.")
+        total_price = sl_mod.estimate_total(st.session_state.shopping_list)
+        st.metric("Total Estimated Cost", f"₹{total_price:,.2f}")
     else:
-        st.info("Shopping list is empty. Add items from Inventory or Dietary tabs.")
+        st.info("Your shopping list is empty. Add items from the 'Inventory' or 'Dietary Preferences' pages.")
 
 # ---------------- Budget ----------------
 elif menu == "Budget":
     st.header("💰 Budget Manager")
     planned = sl_mod.estimate_total(st.session_state.shopping_list)
     b = st.session_state.budget
-    col = st.columns(3)
-    b["monthly_budget"] = col[0].number_input("Monthly budget (₹)", min_value=0.0, step=100.0, value=float(b.get("monthly_budget", 0.0)))
-    b["spent_this_month"] = col[1].number_input("Spent this month (₹)", min_value=0.0, step=50.0, value=float(b.get("spent_this_month", 0.0)))
-    st.metric("Planned spend (₹)", planned)
+    col1, col2, col3 = st.columns(3)
+    b["monthly_budget"] = col1.number_input("Monthly budget (₹)", min_value=0.0, step=100.0, value=float(b.get("monthly_budget", 0.0)))
+    b["spent_this_month"] = col2.number_input("Spent this month (₹)", min_value=0.0, step=50.0, value=float(b.get("spent_this_month", 0.0)))
+    col3.metric("Planned spend (₹)", planned)
+
     status = budget_mod.check_budget_status({
         "monthly_budget": b["monthly_budget"],
         "spent_this_month": b["spent_this_month"],
@@ -227,6 +226,15 @@ elif menu == "Budget":
 elif menu == "Expiry Alerts":
     st.header("⏰ Expiry Alerts")
     df = st.session_state.inventory
+    expiring_items = expiring_soon(df, days=30)
+
+    if not expiring_items.empty:
+        st.warning("⚠️ The following items are expiring soon:")
+        st.dataframe(expiring_items)
+    else:
+        st.info("No items are expiring in the next 30 days.")
+
+    st.subheader("Individual Product Expiry Check")
     if "Product_Name" not in df.columns:
         st.info("Dataset missing Product_Name.")
     else:
@@ -236,5 +244,8 @@ elif menu == "Expiry Alerts":
             row = df[df["Product_Name"].astype(str) == sel].iloc[0]
             st.write("**Product:**", row.get("Product_Name", ""))
             st.write("**Brand:**", row.get("Brand", ""))
-            st.write("**Expiry date:**", row.get("expiration_date", "N/A"))
+            if "expiration_date" in row:
+                st.write("**Expiry date:**", row["expiration_date"])
+            else:
+                st.write("**Expiry date:**", "N/A")
             st.write("**Quantity on hand:**", row.get("quantity_on_hand", "N/A"))
